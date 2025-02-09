@@ -4,12 +4,7 @@ import pandas as pd
 from ftplib import FTP
 import os
 
-# CREDENCIALES (HARDCODE)
-OPENAI_API_KEY = "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"
-FTP_HOST = "ftp.merlinnetwork.org"
-FTP_USER = "aries-music-llc-t-as-zndrke"
-FTP_PASS = "tivvab-zipfe6-jUfvyd"
-FTP_PATH = "/trends"
+
 
 # Título y descripción
 st.title("💬 Chatbot con FTP (Credenciales en variables)")
