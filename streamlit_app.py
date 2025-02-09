@@ -4,15 +4,18 @@ import pandas as pd
 from ftplib import FTP
 import os
 
-
+# Lee credenciales desde streamlit secrets
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+FTP_HOST = st.secrets["FTP_HOST"]
+FTP_USER = st.secrets["FTP_USER"]
+FTP_PASS = st.secrets["FTP_PASS"]
+FTP_PATH = st.secrets["FTP_PATH"]
 
 # Título y descripción
-st.title("💬 Chatbot con FTP (Credenciales en variables)")
+st.title("💬 Chatbot con FTP (Usando Streamlit Secrets)")
 st.write(
-    "Este chatbot usa GPT-3.5 e integra informes descargados desde un FTP.\n"
-    "**Nota**: En un proyecto real, evita hardcodear credenciales. Usa [Streamlit Secrets]"
-    "(https://docs.streamlit.io/streamlit-community-cloud/deploying-apps/connecting-to-data-sources/secrets-management) "
-    "o variables de entorno."
+    "Este chatbot usa GPT-3.5 e integra informes descargados desde un FTP, usando secretos de Streamlit.\n"
+    "En producción, usar secrets es la manera recomendada para no exponer credenciales en el código."
 )
 
 # Función para descargar reportes CSV desde el FTP y unirlos en un DataFrame
@@ -49,9 +52,9 @@ if st.button("Descargar informes"):
     else:
         st.warning("No se encontraron CSV o el DataFrame quedó vacío.")
 
-# Verifica la API Key
+# Verifica la API Key de OpenAI (por si en secrets estuviera vacía)
 if not OPENAI_API_KEY:
-    st.info("Falta la clave de OpenAI. Se detiene la app.")
+    st.info("Falta la clave de OpenAI en secrets. Revisa tu `.streamlit/secrets.toml`.", icon="🗝️")
     st.stop()
 else:
     # Creamos el cliente de OpenAI
