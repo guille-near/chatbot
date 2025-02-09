@@ -1,8 +1,8 @@
 import streamlit as st
+import ssl
 from openai import OpenAI
 import pandas as pd
 import os
-import ssl
 from ftplib import FTP_TLS
 
 # ------------------------------------------------------------------------
@@ -12,45 +12,63 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 FTP_HOST = st.secrets["FTP_HOST"]
 FTP_USER = st.secrets["FTP_USER"]
 FTP_PASS = st.secrets["FTP_PASS"]
-DIRECTORY_PATH = st.secrets["DIRECTORY_PATH"]  # "/trends/202502/spo-spotify/weekly-prrt"
+DIRECTORY_PATH = st.secrets["DIRECTORY_PATH"]  # Ej: "/trends/202502/spo-spotify/weekly-prrt"
 
 # ------------------------------------------------------------------------
-# 2) Función para descargar CSV desde la carpeta DIRECTORY_PATH (sin subcarpetas)
+# 2) Función para conectar con AUTH SSL en lugar de AUTH TLS
 # ------------------------------------------------------------------------
-def download_ftp_reports_tls(host, user, password, directory):
+def connect_ftps_auth_ssl(host, user, password, port=21):
     """
-    1) Conecta a un servidor FTPS (puerto 21, modo explícito) usando TLS 1.2 
-       y desactivando verificación de cert (para evitar handshake failures).
-    2) Entra a 'directory' (ej: /trends/202502/spo-spotify/weekly-prrt).
-    3) Descarga archivos .csv, los lee con pandas, concatena en un DataFrame.
-    4) Retorna el DataFrame final (o vacío si no encuentra CSV).
+    Conecta vía FTP_TLS a 'host':21, 
+    evita la llamada AUTH TLS por defecto y fuerza AUTH SSL.
+    Desactiva la verificación de certificado y fuerza TLS 1.2.
     """
-    # Forzamos TLS 1.2 y desactivamos verificación de certificado
+    # Forzamos TLS 1.2, sin verificar el cert (para descartar problemas).
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
+    # Creamos el objeto FTP_TLS con ese contexto
     ftp = FTP_TLS(context=ctx)
-    ftp.connect(host, 21)       # Modo explícito, puerto 21
-    ftp.login(user, password)
-    ftp.prot_p()                # Protege la transferencia de datos
 
-    # Nos ubicamos en el directorio fijo
+    # Conectamos al puerto 21
+    ftp.connect(host, port)
+
+    # Llamamos login con secure=False para que no haga AUTH TLS automático
+    ftp.login(user=user, passwd=password, secure=False)
+
+    # Forzamos AUTH SSL
+    ftp.voidcmd('AUTH SSL')
+
+    # Protegemos la transferencia de datos
+    ftp.prot_p()
+    return ftp
+
+# ------------------------------------------------------------------------
+# 3) Función para descargar CSV de un directorio fijo (sin subcarpetas)
+# ------------------------------------------------------------------------
+def download_ftp_reports_ssl(host, user, password, directory):
+    """
+    1) Conecta usando connect_ftps_auth_ssl (AUTH SSL).
+    2) Entra al directorio especificado.
+    3) Descarga archivos .csv, concatena en un DF y lo regresa.
+    """
+    ftp = connect_ftps_auth_ssl(host, user, password)
+
+    # Ir a la carpeta deseada
     ftp.cwd(directory)
 
-    # Listamos los archivos
     files = ftp.nlst()
-
     dfs = []
+
     for filename in files:
         if filename.lower().endswith(".csv"):
-            # Descargamos localmente
             with open(filename, 'wb') as local_file:
                 ftp.retrbinary(f"RETR {filename}", local_file.write)
-            # Leemos con pandas
-            df_temp = pd.read_csv(filename)
-            dfs.append(df_temp)
-            # Borramos el archivo local
+
+            df_tmp = pd.read_csv(filename)
+            dfs.append(df_tmp)
+
             os.remove(filename)
 
     ftp.quit()
@@ -61,19 +79,18 @@ def download_ftp_reports_tls(host, user, password, directory):
         return pd.DataFrame()
 
 # ------------------------------------------------------------------------
-# 3) Interfaz principal de Streamlit
+# 4) Interfaz de Streamlit
 # ------------------------------------------------------------------------
-st.title("💬 Chatbot con FTPS – Carpeta fija /trends/202502/spo-spotify/weekly-prrt")
+st.title("💬 Chatbot con FTPS Explicito (AUTH SSL) – Carpeta Fija")
 st.write("""
-Esta app se conecta vía **FTPS (puerto 21, modo explícito)** a la ruta 
-`/trends/202502/spo-spotify/weekly-prrt`, descarga los CSV 
-y concatena todo en un DataFrame. Luego, un chatbot (GPT-3.5) 
-puede responder preguntas basándose en esos datos.
+Esta app intenta conectarse a un servidor FTP con TLS (puerto 21), 
+usando **AUTH SSL** en vez de AUTH TLS, y desactiva la verificación de certificado.
+Descarga los archivos .csv de la carpeta que definas en `DIRECTORY_PATH`.
 """)
 
 # Botón "Descargar informes"
 if st.button("Descargar informes"):
-    df = download_ftp_reports_tls(FTP_HOST, FTP_USER, FTP_PASS, DIRECTORY_PATH)
+    df = download_ftp_reports_ssl(FTP_HOST, FTP_USER, FTP_PASS, DIRECTORY_PATH)
     st.session_state["df"] = df
 
     if not df.empty:
@@ -82,30 +99,28 @@ if st.button("Descargar informes"):
         st.warning("No se encontraron CSV o el DataFrame quedó vacío.")
 
 # ------------------------------------------------------------------------
-# 4) Verificamos la API Key de OpenAI y montamos el chat
+# 5) Verificamos la API Key de OpenAI y montamos el chat
 # ------------------------------------------------------------------------
 if not OPENAI_API_KEY:
     st.info("Falta la clave de OpenAI en secrets. Revisa tu `.streamlit/secrets.toml`.", icon="🗝️")
     st.stop()
 else:
-    # Cliente de OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    # Manejo del historial de mensajes
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Renderizamos los mensajes previos
+    # Renderizar mensajes previos (user / assistant)
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Campo para la nueva pregunta
+    # Campo de texto para preguntar
     if user_input := st.chat_input("Pregúntale algo sobre los datos..."):
         df = st.session_state.get("df", pd.DataFrame())
         summary_text = ""
 
-        # Generamos un resumen si detecta columnas "cancion" y "streams"
+        # Pequeño resumen si las columnas son "cancion" y "streams"
         if not df.empty:
             if "cancion" in df.columns and "streams" in df.columns:
                 top = df.groupby("cancion")["streams"].sum().sort_values(ascending=False).head(5)
@@ -118,24 +133,27 @@ else:
                     "Ajusta la lógica según tus columnas."
                 )
 
-        # Combinamos el resumen con la pregunta
+        # Unir el resumen con la pregunta
         user_message = f"{summary_text}\n\nPregunta del usuario: {user_input}"
 
-        # Añadimos el mensaje al historial
+        # Añadir al historial
         st.session_state.messages.append({"role": "user", "content": user_message})
         with st.chat_message("user"):
             st.markdown(user_message)
 
-        # Llamada a la API de OpenAI con streaming
+        # Llamar a la API de OpenAI (modelo gpt-3.5-turbo) con streaming
         stream = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+            messages=[
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages
+            ],
             stream=True,
         )
 
-        # Mostramos la respuesta en tiempo real
+        # Mostrar la respuesta en tiempo real
         with st.chat_message("assistant"):
             response = st.write_stream(stream)
 
-        # Guardamos la respuesta
+        # Guardar la respuesta en el historial
         st.session_state.messages.append({"role": "assistant", "content": response})
